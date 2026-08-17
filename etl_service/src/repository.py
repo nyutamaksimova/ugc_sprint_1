@@ -1,5 +1,6 @@
 from typing import Protocol
 
+from .backoff import backoff
 from .models import VideoEvent
 
 
@@ -11,6 +12,7 @@ class ClickHouseRepository:
     def __init__(self, client: ClickHouseClient) -> None:
         self._client = client
 
+    @backoff()
     def insert(self, events: list[VideoEvent]) -> None:
         if events:
             self._client.insert("video_events", [event.to_row() for event in events])

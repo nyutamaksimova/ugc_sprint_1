@@ -13,25 +13,30 @@ class EtlWorker:
 
     def run_once(self) -> int:
         messages: list[dict[str, Any]] = self.consumer.poll()
-        processed = 0
+        valid_messages: list[dict[str, Any]] = []
+        events = []
         for message in messages:
-            event = transform_event(message)
+            try:
+                event = transform_event(message)
+            except (KeyError, TypeError, ValueError) as error:
+                self.dlq.publish(message, f"Malformed event: {error}")
+                self.consumer.commit([message])
+                continue
             if event is None:
                 self.consumer.commit([message])
                 continue
-            if self._insert(event):
-                self.consumer.commit([message])
-                processed += 1
-            else:
+            valid_messages.append(message)
+            events.append(event)
+
+        if not events:
+            return 0
+        try:
+            self.repository.insert(events)
+        except Exception:
+            for message in valid_messages:
                 self.dlq.publish(message, "ClickHouse insert failed after 5 attempts")
                 self.consumer.commit([message])
-        return processed
-
-    def _insert(self, event) -> bool:
-        for delay in (1, 2, 4, 8, 16):
-            try:
-                self.repository.insert([event])
-                return True
-            except Exception:
-                self.sleep(delay)
-        return False
+            return 0
+        else:
+            self.consumer.commit(valid_messages)
+            return len(events)
